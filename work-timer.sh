@@ -1,10 +1,43 @@
 #!/bin/bash
+clear
 
 center_text() {
     local text="$1"
     local term_width=$(tput cols)
     local padding=$(((term_width) / 8))
     printf "%*s%s%*s\n" $padding "" "$text" $padding ""
+}
+
+format_time_bis() {
+    local timestamp=$1
+
+    # Check if the OS is Linux or macOS
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        # Linux (GNU date)
+        date -d @$timestamp +'%H:%M:%S'
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS (BSD date)
+        date -r $timestamp +'%H:%M:%S'
+    else
+        echo "Unsupported OS"
+        exit 1
+    fi
+}
+
+get_cursor_line_position() {
+    # Save the current terminal settings.
+    exec < /dev/tty
+    oldstty=$(stty -g)
+    # Set terminal to raw mode without echoing input.
+    stty raw -echo min 0
+    # Send the escape sequence to query the cursor position.
+    echo -en "\033[6n" > /dev/tty
+    # Read the response, which will be in the format ESC[row;columnR.
+    IFS=';' read -r -d R -a pos
+    # Restore the terminal settings.
+    stty $oldstty
+    # Extract and return the row number, adjusting for indexing.
+    echo $((${pos[0]:2} - 1))
 }
 
 center_ascii() {
@@ -53,7 +86,7 @@ log_event() {
 
 format_time() {
     local total=$1
-    time_str=$(date -r $total +'%H:%M:%S')
+    time_str=$(format_time_bis $total)
 
     echo $time_str
 }
@@ -86,50 +119,76 @@ format_clock() {
     echo $time_str
 }
 
-ascii_clock() {
-    local time="$1"
-    echo "
-   _  _     _  _  _     _  _
-  | || |  _| || || |_  _| || |_
-  | || |_|_  ..  _|_  ..  _|
-  |_  _|   |_||_|   |_||_|
-     Time: $(format_clock $time)
-"
-}
-
 # Log start
 log_event "Started task: $project | Total Time: $(format_clock $total_seconds) | Projected finish: $(format_time $end_time)"
 
+# Display remaining time in big font
+center_ascii "$ascii_art"
+center_text "${bold}Working on: ${project}${reset}"
+
+tput civis
+tput sc
+
+# Store the initial line positions for later use
+remaining_time_line=1
+progress_bar_line=1
+motivation_line=1
+time_info_line=1
+
+break_line=1
+notification_line=1
+
+firstExecution=1
+
+center_text "$(tput setaf 2)Time Remaining: $(tput sgr0)"
+
 # Main loop
 while [ $elapsed_seconds -lt $total_seconds ]; do
-    clear
-
-    # Display remaining time in big font
-    center_ascii "$ascii_art"
-    center_text "${bold}Working on: ${project}${reset}"
+    if [ "$firstExecution" == 1 ]; then
+        remaining_time_line=$(get_cursor_line_position)
+    fi
+    tput cup $remaining_time_line 0
 
     remaining_seconds=$((total_seconds - elapsed_seconds))
     remaining_time=$(format_clock $remaining_seconds)
-    center_text "$(tput setaf 2)Time Remaining: $(tput sgr0)"
     center_text "$(tput setaf 3)$bold$remaining_time$(tput sgr0)"
 
     # Progress bar logic
+    if [ "$firstExecution" == 1 ]; then
+        progress_bar_line=$(get_cursor_line_position)
+    fi
+    tput cup $progress_bar_line 0
     progress=$(((total_seconds - elapsed_seconds) * 1000 / total_seconds))
     progress_display=$(seq -s "#" $((progress / 25)) | tr -d "[:digit:]")
     empty_space=$(seq -s "." $((1000 / 25 - progress / 25)) | tr -d "[:digit:]")
-    center_text ""
-    center_text "$(tput setaf 1)[${progress_display}${empty_space}]$(tput sgr0)"
+    center_text "$bold$(tput setaf 1)[${progress_display}${empty_space}]$(tput sgr0)"
 
     # Display motivational phrase
     if [ -f $motivation_file ]; then
         phrase=$(shuf -n 1 $motivation_file)
+        if [ "$firstExecution" == 1 ]; then
+        motivation_line=$(get_cursor_line_position)
+        fi
+        tput cup $motivation_line 0
         center_text "$phrase"
     fi
 
     # Show time started, total time, and projected end time
-    start_str=$(date -r $start_time +'%H:%M:%S')
-    projected_end_str=$(date -r $end_time +'%H:%M:%S')
-    center_text "${blue}Started at $start_str${reset} | ${yellow}Working for $hours h $minutes m${reset} | ${green}Finishing at $projected_end_str${reset}"
+    if [ "$firstExecution" == 1 ]; then
+        time_info_line=$(get_cursor_line_position)
+    fi
+
+    tput cup $time_info_line 0
+
+    start_str=$(format_time_bis $start_time)
+    projected_end_str=$(format_time_bis $end_time)
+    center_text "$bold${blue}Started at $start_str${reset} | $bold${yellow}Working for $hours h $minutes m${reset} | $bold${green}Finishing at $projected_end_str${reset}"
+
+    if [ "$firstExecution" == 1 ]; then
+        break_line=$(get_cursor_line_position)
+    fi
+
+    tput cup $break_line 0
 
     # Check for break input
     read -n 1 -t 1 user_input
@@ -141,13 +200,28 @@ while [ $elapsed_seconds -lt $total_seconds ]; do
         break_duration=$((resume_time - pause_time))
         total_break_time=$((total_break_time + break_duration))
         end_time=$((end_time + break_duration))
+        tput cr   # Move the cursor to the beginning of the current line (carriage return)
+        tput el 
+        center_text "$blue+ Break: $break_duration s$(tput sgr0)"
+        break_line=$(get_cursor_line_position)
+
         log_event "Break ended at $(format_time $resume_time) | Break duration: $(format_clock $break_duration)"
+
+
+    fi
+
+    if [ "$user_input" == "q" ]; then
+        echo "Exiting..."
+        break
     fi
 
     # Update elapsed time
     elapsed_seconds=$(($(date +%s) - start_time - total_break_time))
+    firstExecution=0
 
 done
+tput cnorm
+
 
 # Log completion
 log_event "Task finished: $project at $(format_time $(date +%s))"
