@@ -1,6 +1,34 @@
 #!/bin/bash
 clear
 
+
+# Function to display usage
+usage() {
+    echo "Usage: $0 <arg1> <arg2> <arg3> [--ascii-art]"
+    exit 1
+}
+
+# Check for optional arguments
+ascii_art=false
+while [[ "$1" =~ ^- ]]; do
+    case $1 in
+        --ascii-art)
+            ascii_art=true
+            shift # Shift to the next argument
+            ;;
+        *)
+            echo "Unknown option: $1"
+            usage
+            ;;
+    esac
+done
+
+# Check if the required number of arguments is provided
+if [ "$#" -lt 3 ]; then
+    echo "Error: Missing required arguments."
+    usage
+fi
+
 center_text() {
     local text="$1"
     local term_width=$(tput cols)
@@ -123,7 +151,14 @@ format_clock() {
 log_event "Started task: $project | Total Time: $(format_clock $total_seconds) | Projected finish: $(format_time $end_time)"
 
 # Display remaining time in big font
-center_ascii "$ascii_art"
+# Check if --ascii-art is enabled
+if [ "$ascii_art" = true ]; then
+    center_ascii "$ascii_art"
+else
+    # Commands for normal mode (no --ascii-art)
+    center_text "${bold}WORK MÖDE${reset}"
+
+fi
 center_text "${bold}Working on: ${project}${reset}"
 
 tput civis
@@ -141,6 +176,22 @@ notification_line=1
 firstExecution=1
 
 center_text "$(tput setaf 2)Time Remaining: $(tput sgr0)"
+
+beep() {
+    aplay "terminated.wav"
+    exit
+}
+
+cleanup() {
+    tput cnorm
+    # Log completion
+    log_event "Task finished: $project at $(format_time $(date +%s))"
+    center_text "$(tput setaf 2)Finished!$(tput sgr0)"
+    beep 
+}
+
+# Set up a trap to catch signals and call the cleanup function
+trap cleanup SIGINT SIGTERM EXIT
 
 # Main loop
 while [ $elapsed_seconds -lt $total_seconds ]; do
@@ -220,9 +271,7 @@ while [ $elapsed_seconds -lt $total_seconds ]; do
     firstExecution=0
 
 done
-tput cnorm
+
+cleanup()
 
 
-# Log completion
-log_event "Task finished: $project at $(format_time $(date +%s))"
-center_text "$(tput setaf 2)Finished!$(tput sgr0)"
